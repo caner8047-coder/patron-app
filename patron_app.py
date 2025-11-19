@@ -123,10 +123,15 @@ class PatronApp(tk.Tk):
     # ------------------------------------------------------------------ #
     def apply_role_permissions(self):
         """
-        Patron harici roller için:
-          - Çalışan listesinde saatlik ücreti gizle
-          - Aylık Saat / Maaş sekmesinde tüm para kolonlarını gizle
-          - Performans (PPM) sekmesinde para kolonlarını gizle
+        Patron harici (OFIS) kullanıcılar için:
+          - Personeller sekmesinde saatlik ücret sütununu gizle ve giriş alanını kilitle
+          - Mesai sekmesinde mesai saatlik ücret ve toplam mesai ücreti sütunlarını gizle
+          - Aylık Saat / Maaş sekmesinde tüm para kolonlarını + kasa özetini gizle
+          - Performans (PPM) sekmesinde mesai tutarı ve net maaş kolonlarını gizle
+
+        Amaç:
+          Ofis personeli devamsızlık, avans ve mesai saatlerini girebilsin,
+          fakat personelin ne kadar kazandığını göremesin.
         """
 
         # Başlıkta rol metnini güncelle
@@ -137,8 +142,10 @@ class PatronApp(tk.Tk):
         if self.current_role == "PATRON":
             return
 
-        # --- yardımcı: para kolonlarını gizleyen fonksiyon ---
-        def hide_money_columns(tree: ttk.Treeview):
+        # --------------------------------------------------------------
+        # Yardımcı: treeview içindeki "para" kolonlarını gizleyen fonksiyon
+        # --------------------------------------------------------------
+        def hide_money_columns_in_tree(tree: ttk.Treeview):
             try:
                 cols = tree["columns"]
             except Exception:
@@ -147,46 +154,101 @@ class PatronApp(tk.Tk):
             for col in cols:
                 info = tree.heading(col)
                 text = str(info.get("text", "")).strip()
+                lower = text.lower()
 
-                # Maaş / ücret / tutar / avans / kesinti / net maaş gibi alanlar
-                if (
-                    "Maaş" in text
-                    or "Ücret" in text
-                    or "Tutar" in text
-                    or "Kesinti" in text
-                    or "Avans" in text
-                    or "₺" in text
-                    or text == "Mesai"  # Aylık Saat/Maaş tablosundaki para sütunu
-                ):
+                # Avans kolonlarını BILEREK bırakıyoruz (ofis avansı görebilmeli)
+                # Sadece maaş / ücret / net / mesai tutarı gibi kazanç kolonlarını gizliyoruz.
+                is_money = (
+                    ("maaş" in lower)
+                    or ("ücret" in lower)
+                    or ("tutar" in lower)
+                    or ("net" in lower)
+                    or ("kasadan" in lower)
+                    or ("₺" in lower)
+                    or ("kazanç" in lower)
+                    # "Mesai" ama "saat" geçmiyorsa genelde para kolonu oluyor (Aylık Saat / Maaş'taki 'Mesai')
+                    or ("mesai" in lower and "saat" not in lower and "saatlik" not in lower)
+                )
+
+                if is_money:
                     tree.column(col, width=0, stretch=False)
-                    tree.heading(col, text="")  # başlığı da boşalt
+                    tree.heading(col, text="")
 
-        # 1) Personel listesinde saatlik ücret sütununu gizle
+        def hide_money_in_all_treeviews(root_widget: tk.Widget):
+            """Verilen sekme içindeki tüm Treeview'lerde para kolonlarını gizle."""
+            def walk(w):
+                if isinstance(w, ttk.Treeview):
+                    hide_money_columns_in_tree(w)
+                for child in w.winfo_children():
+                    walk(child)
+            walk(root_widget)
+
+        # --------------------------------------------------------------
+        # 1) Personeller sekmesinde saatlik ücret sütununu gizle + girişini kilitle
+        # --------------------------------------------------------------
         try:
-            emp_tree = getattr(self.tab_employees, "tree", None)
-            if emp_tree is not None:
-                for col in emp_tree["columns"]:
-                    info = emp_tree.heading(col)
-                    text = str(info.get("text", "")).strip()
-                    if "Saatlik Ücret" in text or "Ücret" in text or "₺" in text:
-                        emp_tree.column(col, width=0, stretch=False)
-                        emp_tree.heading(col, text="")
+            hide_money_in_all_treeviews(self.tab_employees)
+
+            # Saatlik ücret girişini kilitle:
+            # "Saatlik Ücret" yazan label'ı bulup, aynı satırdaki Entry'yi disable yapıyoruz.
+            def disable_hourly_rate_entry(widget):
+                for child in widget.winfo_children():
+                    try:
+                        if isinstance(child, ttk.Label):
+                            txt = str(child.cget("text")).lower()
+                            if "saatlik" in txt and "ücret" in txt:
+                                info = child.grid_info()
+                                if info:
+                                    row = int(info.get("row", 0))
+                                    col = int(info.get("column", 0))
+                                    parent = child.master
+                                    for sib in parent.winfo_children():
+                                        if isinstance(sib, ttk.Entry):
+                                            sinfo = sib.grid_info()
+                                            if (
+                                                sinfo
+                                                and int(sinfo.get("row", -1)) == row
+                                                and int(sinfo.get("column", -1)) == col + 1
+                                            ):
+                                                sib.configure(state="disabled")
+                        # derine in
+                        disable_hourly_rate_entry(child)
+                    except Exception:
+                        disable_hourly_rate_entry(child)
+
+            disable_hourly_rate_entry(self.tab_employees)
         except Exception:
             pass
 
-        # 2) Aylık Saat / Maaş tablosunda para alanlarını gizle
+        # --------------------------------------------------------------
+        # 2) Mesai sekmesinde mesai saatlik ücret ve toplam mesai ücreti sütunlarını gizle
+        #    (Heading'lerinde 'ücret', '₺', 'tutar' vs. geçen kolonlar gizleniyor)
+        # --------------------------------------------------------------
         try:
-            sal_tree = getattr(self.tab_salary, "tree", None)
-            if sal_tree is not None:
-                hide_money_columns(sal_tree)
+            hide_money_in_all_treeviews(self.tab_overtime)
         except Exception:
             pass
 
-        # 3) Performans (PPM) tablosunda para alanlarını gizle
+        # --------------------------------------------------------------
+        # 3) Aylık Saat / Maaş sekmesinde tüm para kolonlarını + kasa özetini gizle
+        # --------------------------------------------------------------
         try:
-            perf_tree = getattr(self.tab_performance, "tree", None)
-            if perf_tree is not None:
-                hide_money_columns(perf_tree)
+            hide_money_in_all_treeviews(self.tab_salary)
+
+            # Kasa özetini gizle / maskele
+            for attr in ("total_salary_var", "total_overtime_var", "total_net_var"):
+                var = getattr(self.tab_salary, attr, None)
+                if isinstance(var, tk.StringVar):
+                    var.set("Gizli")
+        except Exception:
+            pass
+
+        # --------------------------------------------------------------
+        # 4) Performans (PPM) sekmesinde mesai tutarı ve net maaş kolonlarını gizle
+        #    (Başlıktaki 'Mesai Tutarı', 'Net Maaş', 'Ücret', 'Maaş', '₺' vb.)
+        # --------------------------------------------------------------
+        try:
+            hide_money_in_all_treeviews(self.tab_performance)
         except Exception:
             pass
 
